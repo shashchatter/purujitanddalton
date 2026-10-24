@@ -1,0 +1,5 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=$HOME/purujitanddalton/
+    - /bin/cp -R index.html upload.php images $DEPLOYPATH

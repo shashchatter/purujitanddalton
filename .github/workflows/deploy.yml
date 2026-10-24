@@ -1,0 +1,55 @@
+name: Deploy to Interserver
+
+# On every push to main, tell cPanel to pull from GitHub and deploy HEAD
+# (the same as Update from Remote + Deploy HEAD Commit in Git Version Control).
+#
+# Repo secrets:   CPANEL_HOST   e.g. server123.interserver.net (no https://, no port)
+#                 CPANEL_USER   cPanel username
+#                 CPANEL_TOKEN  cPanel API token (cPanel → Security → Manage API Tokens)
+# Repo variable:  CPANEL_REPO_ROOT  absolute path of the cPanel clone,
+#                 e.g. /home/<user>/repos/purujitanddalton
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull and deploy via cPanel UAPI
+        env:
+          CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+          CPANEL_USER: ${{ secrets.CPANEL_USER }}
+          CPANEL_TOKEN: ${{ secrets.CPANEL_TOKEN }}
+          REPO_ROOT: ${{ vars.CPANEL_REPO_ROOT }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CPANEL_HOST" ] || [ -z "$CPANEL_USER" ] || [ -z "$CPANEL_TOKEN" ] || [ -z "$REPO_ROOT" ]; then
+            echo "::notice::cPanel secrets/variable not set yet; skipping deploy."
+            exit 0
+          fi
+
+          uapi() {
+            local endpoint=$1; shift
+            local out
+            out=$(curl -sS -G --fail-with-body \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/${endpoint}" "$@")
+            if ! echo "$out" | jq -e '.status == 1' >/dev/null; then
+              echo "::error::${endpoint} failed: $(echo "$out" | jq -c '.errors // .' 2>/dev/null || echo "$out")"
+              exit 1
+            fi
+            echo "${endpoint}: ok"
+          }
+
+          uapi VersionControl/update \
+            --data-urlencode "repository_root=${REPO_ROOT}" \
+            --data-urlencode "branch=main"
+
+          uapi VersionControlDeployment/create \
+            --data-urlencode "repository_root=${REPO_ROOT}"
