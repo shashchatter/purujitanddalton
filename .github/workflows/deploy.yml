@@ -34,6 +34,11 @@ jobs:
             exit 0
           fi
 
+          # Accept "https://host:2083/" as well as a bare "host".
+          CPANEL_HOST=${CPANEL_HOST#*://}
+          CPANEL_HOST=${CPANEL_HOST%%/*}
+          CPANEL_HOST=${CPANEL_HOST%%:*}
+
           uapi() {
             local endpoint=$1; shift
             local out
