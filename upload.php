@@ -5,8 +5,28 @@ if (!is_dir($targetDir)) {
     mkdir($targetDir, 0755, true);
 }
 
+// Belt and braces: never let the web server run anything in uploads/, and don't list it.
+$htaccess = $targetDir . '.htaccess';
+if (!is_file($htaccess)) {
+    file_put_contents($htaccess, <<<HTACCESS
+Options -Indexes -ExecCGI
+<FilesMatch "\.(?i:php\d*|phtml|phar|phps|pht|cgi|pl|py|sh|shtml|html?|svg|js)$">
+    Require all denied
+</FilesMatch>
+
+HTACCESS);
+}
+
 $maxBytes = 15 * 1024 * 1024; // 15MB per photo
-$allowed = ['image/jpeg', 'image/png', 'image/heic', 'image/webp', 'image/gif'];
+// Detected MIME type => extension we save it with. The uploader's filename is never used.
+$allowed = [
+    'image/jpeg' => 'jpg',
+    'image/png'  => 'png',
+    'image/heic' => 'heic',
+    'image/heif' => 'heic',
+    'image/webp' => 'webp',
+    'image/gif'  => 'gif',
+];
 
 function fail($msg) {
     http_response_code(400);
@@ -28,13 +48,12 @@ $finfo = finfo_open(FILEINFO_MIME_TYPE);
 $mime = finfo_file($finfo, $file['tmp_name']);
 finfo_close($finfo);
 
-if (!in_array($mime, $allowed, true)) {
+if (!isset($allowed[$mime])) {
     fail('Please upload a photo file (JPG, PNG, HEIC, WEBP, or GIF).');
 }
 
-$ext = pathinfo($file['name'], PATHINFO_EXTENSION);
-$ext = preg_replace('/[^a-zA-Z0-9]/', '', $ext);
-$safeName = 'guest-' . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(4)), 0, 8) . '.' . strtolower($ext);
+$ext = $allowed[$mime];
+$safeName = 'guest-' . date('Ymd-His') . '-' . bin2hex(random_bytes(8)) . '.' . $ext;
 
 if (!move_uploaded_file($file['tmp_name'], $targetDir . $safeName)) {
     fail('We could not save your photo. Please try again.');
