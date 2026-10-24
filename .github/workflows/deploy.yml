@@ -51,14 +51,37 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get install -y -qq lftp >/dev/null
-          lftp -e "
+
+          # The server sends only its leaf certificate. Follow the AIA issuer links
+          # until the chain verifies against the system roots, then trust that bundle.
+          HOST=webhosting2017.is.cc
+          SYS=/etc/ssl/certs/ca-certificates.crt
+          openssl s_client -starttls ftp -connect "$HOST:21" -servername "$HOST" </dev/null 2>/dev/null \
+            | openssl x509 > "$RUNNER_TEMP/leaf.pem"
+          : > "$RUNNER_TEMP/chain.pem"
+          cur=$RUNNER_TEMP/leaf.pem
+          for _ in 1 2 3; do
+            if openssl verify -CAfile "$SYS" -untrusted "$RUNNER_TEMP/chain.pem" -verify_hostname "$HOST" "$RUNNER_TEMP/leaf.pem" >/dev/null 2>&1; then
+              break
+            fi
+            url=$(openssl x509 -in "$cur" -noout -ext authorityInfoAccess | sed -n 's/.*CA Issuers - URI://p' | head -1)
+            [ -n "$url" ] || break
+            curl -fsS "$url" | openssl x509 -inform der > "$RUNNER_TEMP/next.pem"
+            cat "$RUNNER_TEMP/next.pem" >> "$RUNNER_TEMP/chain.pem"
+            cur=$RUNNER_TEMP/next.pem
+          done
+          openssl verify -CAfile "$SYS" -untrusted "$RUNNER_TEMP/chain.pem" -verify_hostname "$HOST" "$RUNNER_TEMP/leaf.pem"
+          cat "$SYS" "$RUNNER_TEMP/chain.pem" > "$RUNNER_TEMP/ca.pem"
+
+          lftp -c "
+            set cmd:fail-exit true;
             set ftp:ssl-force true;
             set ftp:ssl-protect-data true;
             set ssl:verify-certificate true;
+            set ssl:ca-file $RUNNER_TEMP/ca.pem;
             set net:max-retries 3;
             set net:timeout 30;
-            open --env-password -u \"$FTP_USERNAME\" webhosting2017.is.cc;
+            open --env-password -u \"$FTP_USERNAME\" $HOST;
             mirror --reverse --verbose --parallel=4 \
               --exclude '^\.git' --exclude '^\.cpanel\.yml$' --exclude '^README\.md$' \
-              ./ \"$SERVER_DIR\";
-            bye"
+              ./ \"$SERVER_DIR\""
