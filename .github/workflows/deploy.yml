@@ -1,13 +1,17 @@
 name: Deploy to Interserver
 
-# On every push to main, tell cPanel to pull from GitHub and deploy HEAD
-# (the same as Update from Remote + Deploy HEAD Commit in Git Version Control).
+# On every push to main, upload the site over FTPS to the addon domain's
+# document root. Only changed files are sent; files that exist only on the
+# server (e.g. uploads/) are left alone.
 #
-# Repo secrets:   CPANEL_HOST   e.g. server123.interserver.net (no https://, no port)
-#                 CPANEL_USER   cPanel username
-#                 CPANEL_TOKEN  cPanel API token (cPanel → Security → Manage API Tokens)
-# Repo variable:  CPANEL_REPO_ROOT  absolute path of the cPanel clone,
-#                 e.g. /home/<user>/repos/purujitanddalton
+# (cPanel's API on :2083 can't be used from Actions: the server's bot check
+# answers GitHub's runners with a "One moment, please..." page.)
+#
+# Repo secrets:   FTP_USERNAME    cPanel FTP account, e.g. purujitanddalton@thechatterjees.net
+#                 FTP_PASSWORD    its password
+# Repo variable:  FTP_SERVER_DIR  optional; path relative to the FTP account's home.
+#                 Default "./" assumes the account's directory is the document root
+#                 (/home/shashchatter/purujitanddalton).
 
 on:
   push:
@@ -20,41 +24,34 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Pull and deploy via cPanel UAPI
+      - name: Check secrets
+        id: check
         env:
-          CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
-          CPANEL_USER: ${{ secrets.CPANEL_USER }}
-          CPANEL_TOKEN: ${{ secrets.CPANEL_TOKEN }}
-          REPO_ROOT: ${{ vars.CPANEL_REPO_ROOT }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
         run: |
-          set -euo pipefail
-
-          if [ -z "$CPANEL_HOST" ] || [ -z "$CPANEL_USER" ] || [ -z "$CPANEL_TOKEN" ] || [ -z "$REPO_ROOT" ]; then
-            echo "::notice::cPanel secrets/variable not set yet; skipping deploy."
-            exit 0
+          if [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
+            echo "::notice::FTP secrets not set yet; skipping deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
-          # Accept "https://host:2083/" as well as a bare "host".
-          CPANEL_HOST=${CPANEL_HOST#*://}
-          CPANEL_HOST=${CPANEL_HOST%%/*}
-          CPANEL_HOST=${CPANEL_HOST%%:*}
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.ready == 'true'
 
-          uapi() {
-            local endpoint=$1; shift
-            local out
-            out=$(curl -sS -G --fail-with-body \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/${endpoint}" "$@")
-            if ! echo "$out" | jq -e '.status == 1' >/dev/null; then
-              echo "::error::${endpoint} failed: $(echo "$out" | jq -c '.errors // .' 2>/dev/null || echo "$out")"
-              exit 1
-            fi
-            echo "${endpoint}: ok"
-          }
-
-          uapi VersionControl/update \
-            --data-urlencode "repository_root=${REPO_ROOT}" \
-            --data-urlencode "branch=main"
-
-          uapi VersionControlDeployment/create \
-            --data-urlencode "repository_root=${REPO_ROOT}"
+      - name: Upload over FTPS
+        if: steps.check.outputs.ready == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287 # v4.4.0
+        with:
+          server: webhosting2017.is.cc
+          protocol: ftps
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ vars.FTP_SERVER_DIR || './' }}
+          exclude: |
+            **/.git*
+            **/.git*/**
+            .github/**
+            .cpanel.yml
+            README.md
